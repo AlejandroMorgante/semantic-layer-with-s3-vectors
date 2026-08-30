@@ -1,0 +1,47 @@
+[
+  {
+    "id": "ar-quarterly-sales",
+    "question": "What were our net sales in Argentina during the last quarter?",
+    "expected_tables": ["argentina_gold_sales_daily"]
+  },
+  {
+    "id": "mx-customer-segments",
+    "question": "How many active customers do we have in each segment in Mexico?",
+    "expected_tables": ["mexico_gold_customer_360"]
+  },
+  {
+    "id": "us-inventory",
+    "question": "Which products are currently out of stock in the United States?",
+    "expected_tables": ["united_states_gold_inventory_position"]
+  },
+  {
+    "id": "ar-marketing-roi",
+    "question": "Compare marketing spend and attributed revenue by campaign in Argentina.",
+    "expected_tables": ["argentina_gold_marketing_performance"]
+  },
+  {
+    "id": "mx-delivery-delays",
+    "question": "Show delivery delays and on-time delivery rates for Mexico.",
+    "expected_tables": ["mexico_gold_logistics_delivery"]
+  },
+  {
+    "id": "us-profitability",
+    "question": "What is our gross margin and operating profitability in the United States?",
+    "expected_tables": ["united_states_gold_finance_profitability"]
+  },
+  {
+    "id": "ar-raw-pos",
+    "question": "I need the raw point-of-sale transactions received from Argentina.",
+    "expected_tables": ["argentina_bronze_pos_transactions"]
+  },
+  {
+    "id": "mx-enriched-orders",
+    "question": "Find the cleaned and enriched order records for Mexico before aggregation.",
+    "expected_tables": ["mexico_silver_orders_enriched"]
+  },
+  {
+    "id": "us-store-ranking",
+    "question": "Rank United States stores by revenue and comparable-store growth.",
+    "expected_tables": ["united_states_gold_store_performance"]
+  }
+]
