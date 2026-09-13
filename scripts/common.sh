@@ -13,9 +13,17 @@ REPETITIONS="${REPETITIONS:-1}"
 TOP_K="${TOP_K:-5}"
 MODEL_ID="${MODEL_ID:-us.amazon.nova-micro-v1:0}"
 EMBEDDING_MODEL_ID="${EMBEDDING_MODEL_ID:-amazon.titan-embed-text-v2:0}"
+GRAPH_CONSTRUCTION_MODEL_ID="${GRAPH_CONSTRUCTION_MODEL_ID:-amazon.nova-micro-v1:0}"
+NEPTUNE_PROVISIONED_MEMORY="${NEPTUNE_PROVISIONED_MEMORY:-16}"
+S3_VECTORS_KB_ID="${S3_VECTORS_KB_ID:-}"
+NEPTUNE_KB_ID="${NEPTUNE_KB_ID:-}"
+BENCHMARK_STRATEGIES="${BENCHMARK_STRATEGIES:-}"
 
 export AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION="${AWS_REGION}"
 export TF_VAR_aws_region="${AWS_REGION}" TF_VAR_project_name="${PROJECT_NAME}"
+export TF_VAR_embedding_model_id="${EMBEDDING_MODEL_ID}"
+export TF_VAR_graph_construction_model_id="${GRAPH_CONSTRUCTION_MODEL_ID}"
+export TF_VAR_neptune_provisioned_memory="${NEPTUNE_PROVISIONED_MEMORY}"
 
 tf() {
   terraform -chdir="${TF_DIR}" "$@"

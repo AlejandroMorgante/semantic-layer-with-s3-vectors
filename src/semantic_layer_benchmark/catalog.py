@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 COUNTRIES = {
@@ -167,6 +167,20 @@ CORE_TABLES = (
     ),
 )
 
+CORE_RELATIONSHIPS = {
+    "gold_sales_daily": ("DERIVED_FROM silver_orders_enriched",),
+    "gold_customer_360": ("DERIVED_FROM silver_orders_enriched",),
+    "gold_marketing_performance": ("RELATED_TO gold_sales_daily through attributed revenue",),
+    "gold_logistics_delivery": ("DERIVED_FROM silver_orders_enriched",),
+    "gold_finance_profitability": (
+        "DERIVED_FROM gold_sales_daily",
+        "DERIVED_FROM gold_product_performance",
+    ),
+    "silver_orders_enriched": ("DERIVED_FROM bronze_pos_transactions",),
+    "gold_store_performance": ("DERIVED_FROM gold_sales_daily",),
+    "gold_product_performance": ("DERIVED_FROM gold_sales_daily",),
+}
+
 
 @dataclass(frozen=True)
 class TableRecord:
@@ -177,9 +191,10 @@ class TableRecord:
     domain: str
     description: str
     columns: list[str]
+    relationships: list[str] = field(default_factory=list)
 
     def context(self) -> str:
-        return (
+        context = (
             f"Table: {self.key}\n"
             f"Country: {self.country_name}\n"
             f"Medallion layer: {self.layer}\n"
@@ -187,6 +202,9 @@ class TableRecord:
             f"Description: {self.description}\n"
             f"Important columns: {', '.join(self.columns)}"
         )
+        if self.relationships:
+            context += "\nRelationships:\n- " + "\n- ".join(self.relationships)
+        return context
 
 
 def generate_catalog(tables_per_country: int = 100) -> list[TableRecord]:
@@ -195,18 +213,25 @@ def generate_catalog(tables_per_country: int = 100) -> list[TableRecord]:
 
     records: list[TableRecord] = []
     for country, country_name in COUNTRIES.items():
-        country_records = [
-            TableRecord(
-                key=f"{country}_{suffix}",
-                country=country,
-                country_name=country_name,
-                layer=layer,
-                domain=domain,
-                description=description,
-                columns=columns,
+        country_records = []
+        for suffix, layer, domain, description, columns in CORE_TABLES:
+            relationships = [
+                f"{relation} {country}_{target}"
+                for relation_spec in CORE_RELATIONSHIPS.get(suffix, ())
+                for relation, target in [relation_spec.split(" ", maxsplit=1)]
+            ]
+            country_records.append(
+                TableRecord(
+                    key=f"{country}_{suffix}",
+                    country=country,
+                    country_name=country_name,
+                    layer=layer,
+                    domain=domain,
+                    description=description,
+                    columns=columns,
+                    relationships=relationships,
+                )
             )
-            for suffix, layer, domain, description, columns in CORE_TABLES
-        ]
 
         number = 1
         while len(country_records) < tables_per_country:
@@ -250,6 +275,15 @@ def write_catalog(records: list[TableRecord], output_dir: Path) -> tuple[Path, P
     for record in records:
         markdown.extend([f"## {record.key}", "", record.context(), ""])
     markdown_path.write_text("\n".join(markdown), encoding="utf-8")
+    documents_dir = output_dir / "knowledge-base-documents"
+    documents_dir.mkdir(parents=True, exist_ok=True)
+    for stale_document in documents_dir.glob("*.md"):
+        stale_document.unlink()
+    for record in records:
+        (documents_dir / f"{record.key}.md").write_text(
+            f"# {record.key}\n\n{record.context()}\n",
+            encoding="utf-8",
+        )
     return json_path, markdown_path
 
 

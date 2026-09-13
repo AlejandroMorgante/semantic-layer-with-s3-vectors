@@ -1,7 +1,7 @@
 import pytest
 
 from semantic_layer_benchmark.agent import AgentRun
-from semantic_layer_benchmark.benchmark import Pricing, estimated_cost
+from semantic_layer_benchmark.benchmark import Pricing, _selection_metrics, estimated_cost
 
 
 def test_vector_cost_includes_embedding_and_query_request() -> None:
@@ -19,3 +19,13 @@ def test_vector_cost_includes_embedding_and_query_request() -> None:
     pricing = Pricing()
     expected = 0.035 + 0.14 + 0.02 + 0.0000025
     assert estimated_cost(run, "s3_vectors", pricing) == pytest.approx(expected)
+
+
+def test_selection_metrics_penalize_extra_tables() -> None:
+    metrics = _selection_metrics({"expected"}, {"expected", "extra"})
+    assert metrics == {
+        "exact_match": False,
+        "precision": 0.5,
+        "recall": 1.0,
+        "f1": pytest.approx(2 / 3),
+    }

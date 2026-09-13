@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -64,8 +65,30 @@ def command_benchmark(args: argparse.Namespace) -> None:
         top_k=args.top_k,
         repetitions=args.repetitions,
         output_dir=args.output_dir,
+        s3_vectors_kb_id=args.s3_vectors_kb_id,
+        neptune_kb_id=args.neptune_kb_id,
+        strategies=args.strategies,
     )
     print(f"Wrote {len(results)} benchmark records to {args.output_dir}")
+
+
+def command_sync(args: argparse.Namespace) -> None:
+    result = AwsServices().sync_knowledge_base(
+        knowledge_base_id=args.knowledge_base_id,
+        data_source_id=args.data_source_id,
+        poll_seconds=args.poll_seconds,
+        max_attempts=args.max_attempts,
+    )
+    print(
+        json.dumps(
+            {
+                "ingestion_job_id": result.ingestion_job_id,
+                "status": result.status,
+                "statistics": result.statistics,
+            },
+            indent=2,
+        )
+    )
 
 
 def command_purge(args: argparse.Namespace) -> None:
@@ -87,6 +110,13 @@ def command_verify_destroyed(args: argparse.Namespace) -> None:
 def _add_resources(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--bucket", required=True)
     parser.add_argument("--index", required=True)
+
+
+def _parse_strategies(value: str) -> tuple[str, ...]:
+    strategies = tuple(item.strip() for item in value.split(",") if item.strip())
+    if not strategies:
+        raise argparse.ArgumentTypeError("Provide at least one comma-separated strategy")
+    return strategies
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -111,15 +141,41 @@ def build_parser() -> argparse.ArgumentParser:
     index.set_defaults(handler=command_index)
 
     benchmark = subparsers.add_parser("benchmark")
-    _add_resources(benchmark)
+    benchmark.add_argument("--bucket")
+    benchmark.add_argument("--index")
     benchmark.add_argument("--catalog", type=Path, required=True)
     benchmark.add_argument("--questions", type=Path, required=True)
     benchmark.add_argument("--output-dir", type=Path, required=True)
     benchmark.add_argument("--model-id", required=True)
-    benchmark.add_argument("--embedding-model-id", required=True)
+    benchmark.add_argument("--embedding-model-id")
+    benchmark.add_argument(
+        "--s3-vectors-kb-id",
+        default=os.getenv("S3_VECTORS_KB_ID") or None,
+    )
+    benchmark.add_argument(
+        "--neptune-kb-id",
+        default=os.getenv("NEPTUNE_KB_ID") or None,
+    )
+    benchmark.add_argument(
+        "--strategies",
+        type=_parse_strategies,
+        default=(
+            _parse_strategies(os.environ["BENCHMARK_STRATEGIES"])
+            if os.getenv("BENCHMARK_STRATEGIES")
+            else None
+        ),
+        help="Comma-separated strategies; inferred from the supplied resources when omitted.",
+    )
     benchmark.add_argument("--top-k", type=int, default=5)
     benchmark.add_argument("--repetitions", type=int, default=1)
     benchmark.set_defaults(handler=command_benchmark)
+
+    sync = subparsers.add_parser("sync-knowledge-base")
+    sync.add_argument("--knowledge-base-id", required=True)
+    sync.add_argument("--data-source-id", required=True)
+    sync.add_argument("--poll-seconds", type=float, default=5)
+    sync.add_argument("--max-attempts", type=int, default=360)
+    sync.set_defaults(handler=command_sync)
 
     purge = subparsers.add_parser("purge")
     _add_resources(purge)

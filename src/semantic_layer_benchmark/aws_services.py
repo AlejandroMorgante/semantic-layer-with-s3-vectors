@@ -29,6 +29,19 @@ class SearchResult:
     latency_ms: float
 
 
+@dataclass(frozen=True)
+class KnowledgeBaseSearchResult:
+    documents: list[dict[str, Any]]
+    latency_ms: float
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    ingestion_job_id: str
+    status: str
+    statistics: dict[str, int]
+
+
 class AwsServices:
     def __init__(self, profile: str | None = None, region: str | None = None) -> None:
         selected_profile = profile or os.getenv("AWS_PROFILE") or None
@@ -49,6 +62,8 @@ class AwsServices:
         self.region = self.session.region_name
         self.sts = self.session.client("sts", config=config)
         self.bedrock = self.session.client("bedrock-runtime", config=config)
+        self.bedrock_agent = self.session.client("bedrock-agent", config=config)
+        self.bedrock_agent_runtime = self.session.client("bedrock-agent-runtime", config=config)
         self.s3vectors = self.session.client("s3vectors", config=config)
 
     def identity(self) -> dict[str, Any]:
@@ -152,6 +167,86 @@ class AwsServices:
             tables=tables,
             embedding_input_tokens=embedded.input_tokens,
             latency_ms=(time.perf_counter() - started) * 1000,
+        )
+
+    def retrieve_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        query: str,
+        top_k: int,
+    ) -> KnowledgeBaseSearchResult:
+        if not knowledge_base_id.strip():
+            raise ValueError("knowledge_base_id must not be empty")
+        if not query.strip():
+            raise ValueError("Knowledge Base query must not be empty")
+        if top_k < 1:
+            raise ValueError("top_k must be at least 1")
+
+        started = time.perf_counter()
+        response = self.bedrock_agent_runtime.retrieve(
+            knowledgeBaseId=knowledge_base_id,
+            retrievalQuery={"text": query.strip()},
+            retrievalConfiguration={"vectorSearchConfiguration": {"numberOfResults": top_k}},
+        )
+        documents = []
+        for result in response.get("retrievalResults", []):
+            content = result.get("content", {})
+            documents.append(
+                {
+                    "text": content.get("text", ""),
+                    "score": result.get("score"),
+                    "metadata": result.get("metadata", {}),
+                    "document_id": result.get("documentId"),
+                }
+            )
+        return KnowledgeBaseSearchResult(
+            documents=documents,
+            latency_ms=(time.perf_counter() - started) * 1000,
+        )
+
+    def sync_knowledge_base(
+        self,
+        knowledge_base_id: str,
+        data_source_id: str,
+        poll_seconds: float = 5,
+        max_attempts: int = 360,
+    ) -> IngestionResult:
+        if poll_seconds < 0:
+            raise ValueError("poll_seconds must not be negative")
+        if max_attempts < 1:
+            raise ValueError("max_attempts must be at least 1")
+        response = self.bedrock_agent.start_ingestion_job(
+            knowledgeBaseId=knowledge_base_id,
+            dataSourceId=data_source_id,
+            description="Synchronize the semantic layer benchmark corpus",
+        )
+        ingestion_job_id = response["ingestionJob"]["ingestionJobId"]
+        previous_status = ""
+        for _ in range(max_attempts):
+            job = self.bedrock_agent.get_ingestion_job(
+                knowledgeBaseId=knowledge_base_id,
+                dataSourceId=data_source_id,
+                ingestionJobId=ingestion_job_id,
+            )["ingestionJob"]
+            status = job["status"]
+            if status != previous_status:
+                print(f"Ingestion {knowledge_base_id}/{data_source_id}: {status}")
+                previous_status = status
+            if status == "COMPLETE":
+                return IngestionResult(
+                    ingestion_job_id=ingestion_job_id,
+                    status=status,
+                    statistics={
+                        key: int(value) for key, value in job.get("statistics", {}).items()
+                    },
+                )
+            if status in {"FAILED", "STOPPED"}:
+                reasons = "; ".join(job.get("failureReasons", [])) or "no reason returned"
+                raise ValueError(f"Knowledge Base ingestion {status}: {reasons}")
+            time.sleep(poll_seconds)
+        raise TimeoutError(
+            f"Knowledge Base ingestion {ingestion_job_id} did not finish after "
+            f"{max_attempts * poll_seconds:.0f} seconds"
         )
 
     def purge_vectors(self, bucket: str, index: str) -> int:

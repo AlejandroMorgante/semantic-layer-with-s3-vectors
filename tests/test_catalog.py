@@ -1,4 +1,4 @@
-from semantic_layer_benchmark.catalog import COUNTRIES, generate_catalog
+from semantic_layer_benchmark.catalog import COUNTRIES, generate_catalog, write_catalog
 
 
 def test_catalog_has_requested_size_per_country() -> None:
@@ -22,3 +22,23 @@ def test_context_contains_semantics_and_metadata() -> None:
     assert record.country_name in text
     assert record.layer in text
     assert record.domain in text
+
+
+def test_core_catalog_contains_explicit_lineage_relationships() -> None:
+    records = {record.key: record for record in generate_catalog(10)}
+    sales = records["argentina_gold_sales_daily"]
+    assert "DERIVED_FROM argentina_silver_orders_enriched" in sales.relationships
+    assert "Relationships:" in sales.context()
+
+
+def test_write_catalog_replaces_stale_knowledge_base_documents(tmp_path) -> None:
+    documents = tmp_path / "knowledge-base-documents"
+    documents.mkdir()
+    (documents / "stale.md").write_text("stale", encoding="utf-8")
+
+    records = generate_catalog(10)
+    write_catalog(records, tmp_path)
+
+    generated = list(documents.glob("*.md"))
+    assert len(generated) == len(records)
+    assert not (documents / "stale.md").exists()

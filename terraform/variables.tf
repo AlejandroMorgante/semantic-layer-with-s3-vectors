@@ -24,3 +24,26 @@ variable "embedding_dimension" {
     error_message = "embedding_dimension must be 256, 512, or 1024 for Titan Text Embeddings V2."
   }
 }
+
+variable "embedding_model_id" {
+  description = "Bedrock embedding model used by both managed Knowledge Bases."
+  type        = string
+  default     = "amazon.titan-embed-text-v2:0"
+}
+
+variable "graph_construction_model_id" {
+  description = "Bedrock foundation model used to extract GraphRAG entities and relationships."
+  type        = string
+  default     = "amazon.nova-micro-v1:0"
+}
+
+variable "neptune_provisioned_memory" {
+  description = "Provisioned Neptune Analytics memory in m-NCUs. The service minimum is 16."
+  type        = number
+  default     = 16
+
+  validation {
+    condition     = var.neptune_provisioned_memory >= 16 && var.neptune_provisioned_memory <= 24576
+    error_message = "neptune_provisioned_memory must be between 16 and 24576 m-NCUs."
+  }
+}

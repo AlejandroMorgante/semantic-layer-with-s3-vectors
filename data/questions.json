@@ -1,47 +1,96 @@
 [
   {
     "id": "ar-quarterly-sales",
+    "category": "semantic_lookup",
     "question": "What were our net sales in Argentina during the last quarter?",
     "expected_tables": ["argentina_gold_sales_daily"]
   },
   {
     "id": "mx-customer-segments",
+    "category": "semantic_lookup",
     "question": "How many active customers do we have in each segment in Mexico?",
     "expected_tables": ["mexico_gold_customer_360"]
   },
   {
     "id": "us-inventory",
+    "category": "semantic_lookup",
     "question": "Which products are currently out of stock in the United States?",
     "expected_tables": ["united_states_gold_inventory_position"]
   },
   {
     "id": "ar-marketing-roi",
+    "category": "semantic_lookup",
     "question": "Compare marketing spend and attributed revenue by campaign in Argentina.",
     "expected_tables": ["argentina_gold_marketing_performance"]
   },
   {
     "id": "mx-delivery-delays",
+    "category": "semantic_lookup",
     "question": "Show delivery delays and on-time delivery rates for Mexico.",
     "expected_tables": ["mexico_gold_logistics_delivery"]
   },
   {
     "id": "us-profitability",
+    "category": "semantic_lookup",
     "question": "What is our gross margin and operating profitability in the United States?",
     "expected_tables": ["united_states_gold_finance_profitability"]
   },
   {
     "id": "ar-raw-pos",
+    "category": "layer_intent",
     "question": "I need the raw point-of-sale transactions received from Argentina.",
     "expected_tables": ["argentina_bronze_pos_transactions"]
   },
   {
     "id": "mx-enriched-orders",
+    "category": "layer_intent",
     "question": "Find the cleaned and enriched order records for Mexico before aggregation.",
     "expected_tables": ["mexico_silver_orders_enriched"]
   },
   {
     "id": "us-store-ranking",
+    "category": "semantic_lookup",
     "question": "Rank United States stores by revenue and comparable-store growth.",
     "expected_tables": ["united_states_gold_store_performance"]
+  },
+  {
+    "id": "mx-orders-to-delivery-lineage",
+    "category": "relationship_traversal",
+    "question": "Which Mexico tables form the lineage edge from cleaned enriched orders to the certified delivery performance facts?",
+    "expected_tables": [
+      "mexico_silver_orders_enriched",
+      "mexico_gold_logistics_delivery"
+    ]
+  },
+  {
+    "id": "us-pos-to-product-lineage",
+    "category": "relationship_traversal",
+    "question": "Return the complete United States lineage path from raw point-of-sale events, through cleaned orders and certified daily sales, to certified product performance.",
+    "expected_tables": [
+      "united_states_bronze_pos_transactions",
+      "united_states_silver_orders_enriched",
+      "united_states_gold_sales_daily",
+      "united_states_gold_product_performance"
+    ]
+  },
+  {
+    "id": "ar-profitability-input-lineage",
+    "category": "relationship_traversal",
+    "question": "Which certified Argentina tables are connected as direct inputs to financial profitability? Include the profitability table itself.",
+    "expected_tables": [
+      "argentina_gold_finance_profitability",
+      "argentina_gold_sales_daily",
+      "argentina_gold_product_performance"
+    ]
+  },
+  {
+    "id": "cross-country-sales",
+    "category": "cross_catalog_scope",
+    "question": "Compare certified daily net sales across Argentina, Mexico, and the United States.",
+    "expected_tables": [
+      "argentina_gold_sales_daily",
+      "mexico_gold_sales_daily",
+      "united_states_gold_sales_daily"
+    ]
   }
 ]

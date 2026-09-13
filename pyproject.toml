@@ -1,7 +1,7 @@
 [project]
 name = "s3-vectors-semantic-layer"
 version = "0.1.0"
-description = "Reproducible benchmark comparing full catalog context with metadata-filtered retrieval from Amazon S3 Vectors"
+description = "Reproducible benchmark for Markdown, S3 Vectors, Neptune GraphRAG, and hybrid retrieval"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
