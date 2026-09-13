@@ -1,6 +1,6 @@
 # Building a Semantic Layer with Amazon S3 Vectors
 
-![Semantic memory with Amazon Bedrock: full context, vector retrieval, graph retrieval, and hybrid routing](semantic-memory-cover.png)
+![Semantic memory benchmark: full context, vector retrieval, graph retrieval, and hybrid routing](semantic-memory-cover-v2.png)
 
 Natural-language query agents need to discover the right tables before they can generate useful
 SQL. Sending the complete lakehouse catalog on every request works at small scale, but its token
