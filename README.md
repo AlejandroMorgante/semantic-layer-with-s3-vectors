@@ -1,7 +1,5 @@
 # Building a Semantic Layer with Amazon S3 Vectors
 
-![Semantic memory benchmark: full context, vector retrieval, graph retrieval, and hybrid routing](semantic-memory-cover-v2.png)
-
 Natural-language query agents need to discover the right tables before they can generate useful
 SQL. Sending the complete lakehouse catalog on every request works at small scale, but its token
 usage grows with every country, domain, and medallion layer—even when the answer needs one table.
@@ -32,7 +30,7 @@ flowchart TB
     V --> VC[Semantically retrieved context]
     G --> GC[Vector and relationship context]
 
-    MC --> E[Compare accuracy, recall, tokens, latency, and cost]
+    MC --> E[Compare task success, selection quality, tokens, latency, and cost]
     VC --> E
     GC --> E
 ```
@@ -55,8 +53,11 @@ flowchart LR
     G --> A
 ```
 
-The hybrid path is benchmarked rather than assumed to be better. Its results include the chosen
-route and source-call count in addition to the metrics collected for the three specialized agents.
+The hybrid path is benchmarked rather than assumed to be better. It uses an explicit, documented
+routing policy describing the affordances of each source. Its results include the chosen route and
+source-call count in addition to the metrics collected for the three specialized agents. Reports
+record this policy as `prompt_guided_source_affordances_v1`; the result should not be interpreted as
+a blind router independently discovering the purpose of each source.
 
 All four paths in the diagrams are implemented. The original direct S3 Vectors path remains
 available as an optional legacy baseline, but it is not one of the three Knowledge Base comparison
@@ -88,14 +89,19 @@ On September 13, 2026, we ran the complete disposable benchmark in `us-east-1` w
 table selection, Amazon Titan Text Embeddings V2, and Amazon Nova Micro for graph construction.
 Both Knowledge Bases indexed all 300 documents with zero failures, producing 156 measured answers.
 
-| Strategy | Exact match | Category-macro exact | Mean F1 | Mean input tokens | Input reduction vs. Markdown | Mean latency |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Full Markdown | **92.3%** | **91.7%** | **0.985** | 30,367.8 | — | 1,354.3 ms |
-| S3 Vectors KB | 84.6% | 66.7% | 0.938 | **719.1** | 97.6% | **1,017.5 ms** |
-| Neptune GraphRAG KB | 69.2% | 50.0% | 0.854 | **712.1** | 97.7% | 1,725.1 ms |
-| Hybrid router | 84.6% | 66.7% | **0.963** | 4,036.7 | **86.7%** | 2,805.5 ms |
+| Strategy | Task success | Strict exact | Category-macro success | Mean F1 | Mean input tokens | Input reduction vs. Markdown | Mean latency |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Full Markdown | **92.3%** | **92.3%** | **91.7%** | **0.985** | 30,367.8 | — | 1,354.3 ms |
+| S3 Vectors KB | 84.6% | 84.6% | 66.7% | 0.938 | **719.1** | 97.6% | **1,017.5 ms** |
+| Neptune GraphRAG KB | 69.2% | 69.2% | 50.0% | 0.854 | **712.1** | 97.7% | 1,725.1 ms |
+| Hybrid router | 84.6% | 84.6% | 66.7% | **0.963** | 4,036.7 | **86.7%** | 2,805.5 ms |
 
-Exact match varied materially by question type:
+Task success means that the selection contains every table required to answer the question. Extra
+tables reduce precision and F1 but do not automatically turn a usable answer into a failure. Strict
+exact match remains available as a more demanding secondary metric. In this run the two rates are
+equal because failed selections omitted a required table rather than merely adding extra tables.
+
+Task success varied materially by question type:
 
 | Question category | Full Markdown | S3 Vectors KB | Neptune GraphRAG KB | Hybrid router |
 | --- | ---: | ---: | ---: | ---: |
@@ -106,13 +112,13 @@ Exact match varied materially by question type:
 
 The result illustrates the trade-off rather than identifying one universal winner:
 
-- Full Markdown achieved the highest exact match and F1, but sent roughly 42 times as many input
+- Full Markdown achieved the highest task success and F1, but sent roughly 42 times as many input
   tokens as either managed Knowledge Base.
-- Both managed Knowledge Bases achieved 100% exact match for semantic lookup and layer-intent
+- Both managed Knowledge Bases achieved 100% task success for semantic lookup and layer-intent
   questions while reducing input context by more than 97% relative to Full Markdown. In this run,
   the S3 Vectors KB also had the lowest mean end-to-end latency.
 - The hybrid router improved mean F1 over both individual Knowledge Bases while using 86.7% fewer
-  input tokens than Full Markdown. It matched the S3 Vectors KB's exact-match rate rather than the
+  input tokens than Full Markdown. It matched the S3 Vectors KB's task-success rate rather than the
   Full Markdown result.
 - Routing quality became part of the problem. The hybrid agent used only the S3 Vectors KB for 27
   answers and combined S3 Vectors with Neptune for 12; it never loaded Full Markdown. Its miss on
@@ -149,16 +155,20 @@ Region before using them for an architecture decision.
 
 Every forced agent uses the same question, generation model, temperature, output contract, Top-K,
 and table-selection policy. Both managed Knowledge Bases are queried through Bedrock `Retrieve`,
-so the comparison does not accidentally mix retrieval quality with different generation APIs.
+so the comparison does not accidentally mix retrieval quality with different generation APIs. The
+current runner deterministically counterbalances execution order across questions and repetitions
+so one strategy does not always receive the same warm-up or temporal position. The September 13
+result above predates that change, so its latency values should be treated as descriptive until the
+benchmark is rerun.
 
 Questions are classified as `semantic_lookup`, `layer_intent`, `relationship_traversal`, or
 `cross_catalog_scope`. The category is never passed to an agent; it is used only to aggregate the
 results afterward.
 
-The report records exact match, selection precision/recall/F1, retrieval recall, tokens, retrieval
-and end-to-end latency, route and source-call count, and a deliberately scoped cost estimate. Both
-micro accuracy and category-macro accuracy are shown so the larger semantic-lookup category cannot
-hide poor relationship traversal.
+The report treats complete required-table coverage as task success and records strict exact match,
+selection precision/recall/F1, retrieval recall, tokens, retrieval and end-to-end latency, route and
+source-call count, and a deliberately scoped cost estimate. Both micro and category-macro task
+success are shown so the larger semantic-lookup category cannot hide poor relationship traversal.
 
 ## Run the four-strategy benchmark
 
@@ -243,6 +253,9 @@ This command:
 6. Verifies model access and waits for both ingestion jobs to complete.
 7. Creates the vectors for the optional direct S3 Vectors baseline.
 
+Direct indexing reconciles the index with the generated catalog: vectors whose table keys are no
+longer present are deleted after the current catalog is successfully embedded and upserted.
+
 If any step fails, `up` invokes `destroy` before returning an error. A successful `up` intentionally
 leaves resources running so benchmarks can be repeated.
 
@@ -268,14 +281,18 @@ Do not rename `PROJECT_NAME`, switch accounts, or switch Regions between `up` an
 ## Security and privacy
 
 - The repository contains only synthetic table names, descriptions, columns, and questions.
-- AWS credentials are never stored in the project. boto3, the AWS CLI, and Terraform use the
-  standard AWS credential chain or the `AWS_PROFILE` supplied at runtime.
+- AWS credentials are never stored in the project. With no `AWS_PROFILE`, boto3, the AWS CLI, and
+  Terraform use their standard credential chains. Supplying `AWS_PROFILE` explicitly selects that
+  named profile.
 - Generated catalogs, benchmark output, Terraform state, variable files, `.env` files, and local
   tool caches are excluded from Git.
 - Resource names are derived at deployment time. No AWS account ID or local profile name is
   committed.
 - Terraform scopes every resource to this benchmark. `make demo` destroys the corpus bucket, vector
   buckets, Knowledge Bases, IAM roles, and Neptune graph and verifies their absence before exiting.
+- Bedrock's bootstrap trust policy is limited to the account, service principal, and Knowledge Base
+  resource family because the generated Knowledge Base ARN is unavailable until after its role
+  exists. Long-lived deployments should tighten `aws:SourceArn` to the exact ARN after creation.
 
 Review the generated `.benchmark/` artifacts before sharing them if you replace the synthetic
 catalog or questions with your own organizational metadata.
@@ -316,7 +333,9 @@ Generated artifacts are written below `.benchmark/`:
 Per-question results include:
 
 - expected, retrieved, and selected tables
-- question category, exact match, selection precision/recall/F1, and retrieval recall
+- question category, task success, strict exact match, selection precision/recall/F1, and retrieval
+  recall
+- the strategy's counterbalanced execution position
 - metadata filters chosen by the agent
 - knowledge sources and number of source calls used by the hybrid router
 - model input and output tokens
@@ -326,7 +345,7 @@ Per-question results include:
 
 ## Cost methodology
 
-Pricing defaults are dated and recorded in every run. The current defaults use:
+Pricing defaults are dated and recorded in every run. The current configured rates cover:
 
 - Amazon Nova Micro model input and output tokens
 - Amazon Titan Text Embeddings V2 input tokens
@@ -342,7 +361,10 @@ only. The `Retrieve` response does not expose an itemized retrieval charge, so t
 those rows `model_only` instead of presenting an incomparable total as if it were complete. Add the
 corresponding AWS billing measurements before making a final cost claim.
 
-Before publishing results, verify the rates in `Pricing` against the official AWS pricing pages.
+Cost is calculated only when the configured model IDs have matching rates in `Pricing`. Unknown
+generation or direct-retrieval embedding models produce a null estimate with an explicit
+`unavailable_for_configured_model` scope instead of silently applying Nova Micro or Titan rates.
+Before publishing results, verify the configured rates against the official AWS pricing pages.
 
 ## Infrastructure
 
@@ -366,8 +388,8 @@ uv sync
 make check
 ```
 
-The AWS profile is never hardcoded. The default profile name is `default`; pass `AWS_PROFILE` on the
-command line or export it in your shell.
+The AWS profile is never hardcoded. Omit `AWS_PROFILE` to use the standard AWS credential chain, or
+pass a named profile on the command line/export it in your shell.
 
 ## License
 

@@ -1,4 +1,9 @@
 locals {
+  # Bedrock needs the role before it can create the Knowledge Base, so its generated ID is not
+  # available for the initial trust policy without a dependency cycle. SourceAccount, the Bedrock
+  # service principal, and the Knowledge Base resource family constrain this disposable bootstrap
+  # role. Long-lived deployments should tighten SourceArn to the created Knowledge Base ARN in a
+  # separate post-creation hardening step.
   bedrock_assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{

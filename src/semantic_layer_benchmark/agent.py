@@ -9,6 +9,8 @@ from typing import Any
 from semantic_layer_benchmark.aws_services import AwsServices
 from semantic_layer_benchmark.catalog import COUNTRIES, LAYERS
 
+HYBRID_ROUTING_POLICY = "prompt_guided_source_affordances_v1"
+
 SYSTEM_PROMPT = """You select the smallest set of data-platform tables needed to answer a
 business question. Prefer certified gold tables for business metrics. Use silver only when the
 question requests cleaned pre-aggregation records, and bronze only when it explicitly requests

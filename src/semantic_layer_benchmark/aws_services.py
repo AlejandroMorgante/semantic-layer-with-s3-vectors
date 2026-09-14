@@ -64,6 +64,8 @@ class AwsServices:
         self.bedrock = self.session.client("bedrock-runtime", config=config)
         self.bedrock_agent = self.session.client("bedrock-agent", config=config)
         self.bedrock_agent_runtime = self.session.client("bedrock-agent-runtime", config=config)
+        self.neptune_graph = self.session.client("neptune-graph", config=config)
+        self.s3 = self.session.client("s3", config=config)
         self.s3vectors = self.session.client("s3vectors", config=config)
 
     def identity(self) -> dict[str, Any]:
@@ -96,6 +98,12 @@ class AwsServices:
         embedding_model_id: str,
         workers: int = 4,
     ) -> dict[str, int]:
+        record_keys = [record.key for record in records]
+        if len(record_keys) != len(set(record_keys)):
+            raise ValueError("Catalog records must have unique keys")
+
+        existing_keys = set(self._list_vector_keys(bucket, index))
+
         def vectorize(record: TableRecord) -> tuple[dict[str, Any], int]:
             embedded = self.embed(record.context(), embedding_model_id)
             return (
@@ -121,8 +129,11 @@ class AwsServices:
                 indexName=index,
                 vectors=vectors[start : start + 100],
             )
+        stale_keys = sorted(existing_keys - set(record_keys))
+        self._delete_vector_keys(bucket, index, stale_keys)
         return {
             "vectors_indexed": len(vectors),
+            "vectors_deleted": len(stale_keys),
             "embedding_input_tokens": sum(item[1] for item in embedded_records),
             "put_requests": (len(vectors) + 99) // 100,
         }
@@ -250,27 +261,34 @@ class AwsServices:
         )
 
     def purge_vectors(self, bucket: str, index: str) -> int:
-        keys: list[str] = []
         try:
-            paginator = self.s3vectors.get_paginator("list_vectors")
-            for page in paginator.paginate(
-                vectorBucketName=bucket,
-                indexName=index,
-                returnData=False,
-                returnMetadata=False,
-            ):
-                keys.extend(vector["key"] for vector in page.get("vectors", []))
+            keys = self._list_vector_keys(bucket, index)
         except ClientError as error:
             if _is_not_found(error):
                 return 0
             raise
+        self._delete_vector_keys(bucket, index, keys)
+        return len(keys)
+
+    def _list_vector_keys(self, bucket: str, index: str) -> list[str]:
+        keys: list[str] = []
+        paginator = self.s3vectors.get_paginator("list_vectors")
+        for page in paginator.paginate(
+            vectorBucketName=bucket,
+            indexName=index,
+            returnData=False,
+            returnMetadata=False,
+        ):
+            keys.extend(vector["key"] for vector in page.get("vectors", []))
+        return keys
+
+    def _delete_vector_keys(self, bucket: str, index: str, keys: list[str]) -> None:
         for start in range(0, len(keys), 500):
             self.s3vectors.delete_vectors(
                 vectorBucketName=bucket,
                 indexName=index,
                 keys=keys[start : start + 500],
             )
-        return len(keys)
 
     def force_delete(self, bucket: str, index: str) -> None:
         self.purge_vectors(bucket, index)
@@ -299,6 +317,31 @@ class AwsServices:
             if _is_not_found(error):
                 return False
             raise
+
+    def s3_bucket_exists(self, bucket: str) -> bool:
+        try:
+            self.s3.head_bucket(Bucket=bucket)
+            return True
+        except ClientError as error:
+            if _is_not_found(error):
+                return False
+            raise
+
+    def knowledge_base_exists(self, name: str) -> bool:
+        paginator = self.bedrock_agent.get_paginator("list_knowledge_bases")
+        return any(
+            summary.get("name") == name
+            for summary in paginator.paginate().search("knowledgeBaseSummaries[]")
+            if summary is not None
+        )
+
+    def neptune_graph_exists(self, name: str) -> bool:
+        paginator = self.neptune_graph.get_paginator("list_graphs")
+        return any(
+            graph.get("name") == name
+            for graph in paginator.paginate().search("graphs[]")
+            if graph is not None
+        )
 
     def get_index(self, bucket: str, index: str) -> dict[str, Any]:
         return self.s3vectors.get_index(vectorBucketName=bucket, indexName=index)

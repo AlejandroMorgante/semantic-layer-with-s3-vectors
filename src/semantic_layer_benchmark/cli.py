@@ -102,9 +102,23 @@ def command_force_delete(args: argparse.Namespace) -> None:
 
 
 def command_verify_destroyed(args: argparse.Namespace) -> None:
-    if AwsServices().vector_bucket_exists(args.bucket):
-        raise ValueError(f"Vector bucket still exists after destroy: {args.bucket}")
-    print(f"Verified absent: {args.bucket}")
+    services = AwsServices()
+    remaining = []
+    if services.vector_bucket_exists(args.bucket):
+        remaining.append(f"S3 Vectors bucket {args.bucket}")
+    if services.vector_bucket_exists(args.knowledge_base_vector_bucket):
+        remaining.append(f"Knowledge Base vector bucket {args.knowledge_base_vector_bucket}")
+    if services.s3_bucket_exists(args.source_bucket):
+        remaining.append(f"knowledge source bucket {args.source_bucket}")
+    if services.knowledge_base_exists(args.s3_knowledge_base_name):
+        remaining.append(f"Knowledge Base {args.s3_knowledge_base_name}")
+    if services.knowledge_base_exists(args.neptune_knowledge_base_name):
+        remaining.append(f"Knowledge Base {args.neptune_knowledge_base_name}")
+    if services.neptune_graph_exists(args.graph_name):
+        remaining.append(f"Neptune Analytics graph {args.graph_name}")
+    if remaining:
+        raise ValueError("Resources still exist after destroy: " + ", ".join(remaining))
+    print("Verified all benchmark buckets, Knowledge Bases, and graph are absent")
 
 
 def _add_resources(parser: argparse.ArgumentParser) -> None:
@@ -119,12 +133,19 @@ def _parse_strategies(value: str) -> tuple[str, ...]:
     return strategies
 
 
+def _positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("value must be at least 1")
+    return parsed
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Benchmark semantic table retrieval")
     subparsers = parser.add_subparsers(required=True)
 
     generate = subparsers.add_parser("generate")
-    generate.add_argument("--tables-per-country", type=int, default=100)
+    generate.add_argument("--tables-per-country", type=_positive_int, default=100)
     generate.add_argument("--output-dir", type=Path, required=True)
     generate.set_defaults(handler=command_generate)
 
@@ -166,15 +187,15 @@ def build_parser() -> argparse.ArgumentParser:
         ),
         help="Comma-separated strategies; inferred from the supplied resources when omitted.",
     )
-    benchmark.add_argument("--top-k", type=int, default=5)
-    benchmark.add_argument("--repetitions", type=int, default=1)
+    benchmark.add_argument("--top-k", type=_positive_int, default=5)
+    benchmark.add_argument("--repetitions", type=_positive_int, default=1)
     benchmark.set_defaults(handler=command_benchmark)
 
     sync = subparsers.add_parser("sync-knowledge-base")
     sync.add_argument("--knowledge-base-id", required=True)
     sync.add_argument("--data-source-id", required=True)
     sync.add_argument("--poll-seconds", type=float, default=5)
-    sync.add_argument("--max-attempts", type=int, default=360)
+    sync.add_argument("--max-attempts", type=_positive_int, default=360)
     sync.set_defaults(handler=command_sync)
 
     purge = subparsers.add_parser("purge")
@@ -187,6 +208,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify = subparsers.add_parser("verify-destroyed")
     verify.add_argument("--bucket", required=True)
+    verify.add_argument("--knowledge-base-vector-bucket", required=True)
+    verify.add_argument("--source-bucket", required=True)
+    verify.add_argument("--s3-knowledge-base-name", required=True)
+    verify.add_argument("--neptune-knowledge-base-name", required=True)
+    verify.add_argument("--graph-name", required=True)
     verify.set_defaults(handler=command_verify_destroyed)
     return parser
 

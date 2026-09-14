@@ -34,12 +34,10 @@ s3_vectors_data_source_id="$(terraform_output s3_vectors_data_source_id)"
 neptune_kb_id="$(terraform_output neptune_kb_id)"
 neptune_data_source_id="$(terraform_output neptune_data_source_id)"
 
-aws s3 sync \
+aws_cli s3 sync \
   "${BENCHMARK_DIR}/knowledge-base-documents/" \
   "s3://${source_bucket_name}/catalog/" \
-  --delete \
-  --profile "${AWS_PROFILE}" \
-  --region "${AWS_REGION}"
+  --delete
 
 benchmark_cli preflight \
   --bucket "${bucket_name}" \
@@ -65,4 +63,4 @@ trap - EXIT
 echo "UP complete. Resources remain active for benchmarks."
 echo "S3 Vectors Knowledge Base: ${s3_vectors_kb_id}"
 echo "Neptune GraphRAG Knowledge Base: ${neptune_kb_id}"
-echo "Run 'make destroy AWS_PROFILE=${AWS_PROFILE} AWS_REGION=${AWS_REGION}' when finished."
+echo "Run 'make destroy AWS_REGION=${AWS_REGION}' with the same AWS credentials when finished."

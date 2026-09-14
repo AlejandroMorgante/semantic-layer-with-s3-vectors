@@ -4,7 +4,7 @@ source "$(dirname "$0")/common.sh"
 
 require_command aws
 require_command uv
-aws sts get-caller-identity --profile "${AWS_PROFILE}" --region "${AWS_REGION}" >/dev/null
+aws_cli sts get-caller-identity >/dev/null
 
 if command -v terraform >/dev/null 2>&1; then
   if [[ -z "${S3_VECTORS_KB_ID}" ]]; then

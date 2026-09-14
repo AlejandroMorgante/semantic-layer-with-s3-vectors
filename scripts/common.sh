@@ -5,7 +5,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TF_DIR="${ROOT_DIR}/terraform"
 BENCHMARK_DIR="${ROOT_DIR}/.benchmark"
 
-AWS_PROFILE="${AWS_PROFILE:-default}"
+AWS_PROFILE="${AWS_PROFILE:-}"
 AWS_REGION="${AWS_REGION:-us-east-1}"
 PROJECT_NAME="${PROJECT_NAME:-semantic-layer-benchmark}"
 TABLES_PER_COUNTRY="${TABLES_PER_COUNTRY:-100}"
@@ -19,7 +19,12 @@ S3_VECTORS_KB_ID="${S3_VECTORS_KB_ID:-}"
 NEPTUNE_KB_ID="${NEPTUNE_KB_ID:-}"
 BENCHMARK_STRATEGIES="${BENCHMARK_STRATEGIES:-}"
 
-export AWS_PROFILE AWS_REGION AWS_DEFAULT_REGION="${AWS_REGION}"
+if [[ -n "${AWS_PROFILE}" ]]; then
+  export AWS_PROFILE
+else
+  unset AWS_PROFILE
+fi
+export AWS_REGION AWS_DEFAULT_REGION="${AWS_REGION}"
 export TF_VAR_aws_region="${AWS_REGION}" TF_VAR_project_name="${PROJECT_NAME}"
 export TF_VAR_embedding_model_id="${EMBEDDING_MODEL_ID}"
 export TF_VAR_graph_construction_model_id="${GRAPH_CONSTRUCTION_MODEL_ID}"
@@ -30,6 +35,13 @@ tf() {
 }
 benchmark_cli() {
   uv run --project "${ROOT_DIR}" semantic-layer-benchmark "$@"
+}
+aws_cli() {
+  local aws_options=(--region "${AWS_REGION}")
+  if [[ -n "${AWS_PROFILE:-}" ]]; then
+    aws_options+=(--profile "${AWS_PROFILE}")
+  fi
+  aws "${aws_options[@]}" "$@"
 }
 
 require_command() {
@@ -43,7 +55,7 @@ preflight_tools() {
   require_command aws
   require_command terraform
   require_command uv
-  aws sts get-caller-identity --profile "${AWS_PROFILE}" --region "${AWS_REGION}" >/dev/null
+  aws_cli sts get-caller-identity >/dev/null
 }
 
 terraform_output() {

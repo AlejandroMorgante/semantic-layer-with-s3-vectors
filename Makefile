@@ -1,4 +1,4 @@
-AWS_PROFILE ?= default
+AWS_PROFILE ?=
 AWS_REGION ?= us-east-1
 PROJECT_NAME ?= semantic-layer-benchmark
 TABLES_PER_COUNTRY ?= 100

@@ -6,7 +6,7 @@ preflight_tools
 uv sync --project "${ROOT_DIR}" --frozen
 tf init -input=false
 
-account_id="$(aws sts get-caller-identity --profile "${AWS_PROFILE}" --query Account --output text)"
+account_id="$(aws_cli sts get-caller-identity --query Account --output text)"
 fallback_bucket="${PROJECT_NAME}-${account_id}-${AWS_REGION}"
 fallback_bucket="${fallback_bucket:0:63}"
 fallback_kb_bucket="${PROJECT_NAME}-kb-${account_id}-${AWS_REGION}"
@@ -28,43 +28,12 @@ if ! tf destroy -auto-approve -input=false; then
   tf destroy -auto-approve -input=false
 fi
 
-benchmark_cli verify-destroyed --bucket "${bucket_name}"
-if aws s3vectors get-vector-bucket \
-  --vector-bucket-name "${kb_bucket_name}" \
-  --profile "${AWS_PROFILE}" \
-  --region "${AWS_REGION}" >/dev/null 2>&1; then
-  echo "Knowledge Base vector bucket still exists: ${kb_bucket_name}" >&2
-  exit 1
-fi
-if aws s3api head-bucket \
-  --bucket "${source_bucket_name}" \
-  --profile "${AWS_PROFILE}" \
-  --region "${AWS_REGION}" >/dev/null 2>&1; then
-  echo "Knowledge source bucket still exists: ${source_bucket_name}" >&2
-  exit 1
-fi
-
-s3_kb_count="$(aws bedrock-agent list-knowledge-bases \
-  --profile "${AWS_PROFILE}" \
-  --region "${AWS_REGION}" \
-  --max-results 100 \
-  --query "length(knowledgeBaseSummaries[?name=='${PROJECT_NAME}-s3-vectors-kb'])" \
-  --output text)"
-neptune_kb_count="$(aws bedrock-agent list-knowledge-bases \
-  --profile "${AWS_PROFILE}" \
-  --region "${AWS_REGION}" \
-  --max-results 100 \
-  --query "length(knowledgeBaseSummaries[?name=='${PROJECT_NAME}-neptune-kb'])" \
-  --output text)"
-graph_count="$(aws neptune-graph list-graphs \
-  --profile "${AWS_PROFILE}" \
-  --region "${AWS_REGION}" \
-  --max-results 100 \
-  --query "length(graphs[?name=='${PROJECT_NAME}-graphrag'])" \
-  --output text)"
-if [[ "${s3_kb_count}" != "0" || "${neptune_kb_count}" != "0" || "${graph_count}" != "0" ]]; then
-  echo "Managed benchmark resources remain after destroy." >&2
-  exit 1
-fi
+benchmark_cli verify-destroyed \
+  --bucket "${bucket_name}" \
+  --knowledge-base-vector-bucket "${kb_bucket_name}" \
+  --source-bucket "${source_bucket_name}" \
+  --s3-knowledge-base-name "${PROJECT_NAME}-s3-vectors-kb" \
+  --neptune-knowledge-base-name "${PROJECT_NAME}-neptune-kb" \
+  --graph-name "${PROJECT_NAME}-graphrag"
 
 echo "DESTROY complete. Verified all benchmark buckets, Knowledge Bases, and graph are absent."

@@ -3,12 +3,13 @@ from __future__ import annotations
 import csv
 import json
 import statistics
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 from semantic_layer_benchmark.agent import (
+    HYBRID_ROUTING_POLICY,
     AgentRun,
     run_full_context,
     run_hybrid_context,
@@ -28,23 +29,45 @@ ALL_STRATEGIES = frozenset((*TARGET_STRATEGIES, *LEGACY_STRATEGIES))
 
 
 @dataclass(frozen=True)
+class ModelTokenPricing:
+    input_per_million: float
+    output_per_million: float
+
+
+@dataclass(frozen=True)
 class Pricing:
     effective_date: str = "2026-08-30"
-    nova_micro_input_per_million: float = 0.035
-    nova_micro_output_per_million: float = 0.14
-    titan_embedding_input_per_million: float = 0.02
+    generation_models: dict[str, ModelTokenPricing] = field(
+        default_factory=lambda: {
+            "amazon.nova-micro-v1:0": ModelTokenPricing(0.035, 0.14),
+            "us.amazon.nova-micro-v1:0": ModelTokenPricing(0.035, 0.14),
+        }
+    )
+    embedding_models_input_per_million: dict[str, float] = field(
+        default_factory=lambda: {"amazon.titan-embed-text-v2:0": 0.02}
+    )
     s3_vectors_query_per_million: float = 2.50
 
 
-def estimated_cost(run: AgentRun, strategy: str, pricing: Pricing) -> float:
+def estimated_cost(
+    run: AgentRun,
+    strategy: str,
+    pricing: Pricing,
+    model_id: str,
+    embedding_model_id: str | None = None,
+) -> float | None:
+    model_pricing = pricing.generation_models.get(model_id)
+    if model_pricing is None:
+        return None
     cost = (
-        run.input_tokens * pricing.nova_micro_input_per_million
-        + run.output_tokens * pricing.nova_micro_output_per_million
+        run.input_tokens * model_pricing.input_per_million
+        + run.output_tokens * model_pricing.output_per_million
     ) / 1_000_000
     if strategy in {"s3_vectors", "direct_s3_vectors"}:
-        cost += (
-            run.retrieval_embedding_tokens * pricing.titan_embedding_input_per_million
-        ) / 1_000_000
+        embedding_pricing = pricing.embedding_models_input_per_million.get(embedding_model_id or "")
+        if embedding_pricing is None:
+            return None
+        cost += (run.retrieval_embedding_tokens * embedding_pricing) / 1_000_000
         cost += pricing.s3_vectors_query_per_million / 1_000_000
     return cost
 
@@ -64,6 +87,7 @@ def run_benchmark(
     neptune_kb_id: str | None = None,
     strategies: tuple[str, ...] | None = None,
 ) -> list[dict[str, Any]]:
+    _validate_run_parameters(model_id=model_id, top_k=top_k, repetitions=repetitions)
     selected_strategies = strategies or _default_strategies(
         bucket=bucket,
         index=index,
@@ -84,8 +108,12 @@ def run_benchmark(
     pricing = Pricing()
     results: list[dict[str, Any]] = []
     for repetition in range(1, repetitions + 1):
-        for question in questions:
-            for strategy in selected_strategies:
+        for question_position, question in enumerate(questions):
+            strategy_order = _counterbalanced_order(
+                selected_strategies,
+                offset=question_position + repetition - 1,
+            )
+            for execution_order, strategy in enumerate(strategy_order, start=1):
                 run = _run_strategy(
                     strategy=strategy,
                     services=services,
@@ -103,6 +131,14 @@ def run_benchmark(
                 selected = set(run.selected_tables)
                 retrieved = set(run.retrieved_tables)
                 metrics = _selection_metrics(expected, selected)
+                task_success = metrics["recall"] == 1.0
+                cost = estimated_cost(
+                    run,
+                    strategy,
+                    pricing,
+                    model_id,
+                    embedding_model_id,
+                )
                 result = {
                     "run_at": datetime.now(UTC).isoformat(),
                     "repetition": repetition,
@@ -110,6 +146,7 @@ def run_benchmark(
                     "category": question["category"],
                     "question": question["question"],
                     "strategy": strategy,
+                    "strategy_execution_order": execution_order,
                     "expected_tables": sorted(expected),
                     "selected_tables": run.selected_tables,
                     "retrieved_tables": run.retrieved_tables,
@@ -117,25 +154,21 @@ def run_benchmark(
                     "filters": run.filters,
                     "tools_used": run.tools_used,
                     "source_calls": len(run.tools_used),
+                    "routing_policy": HYBRID_ROUTING_POLICY if strategy == "hybrid" else None,
+                    "task_success": task_success,
                     "selection_correct": metrics["exact_match"],
                     "selection_exact_match": metrics["exact_match"],
                     "selection_precision": metrics["precision"],
                     "selection_recall": metrics["recall"],
                     "selection_f1": metrics["f1"],
-                    "retrieval_recall": (
-                        len(expected & retrieved) / len(expected) if retrieved else None
-                    ),
+                    "retrieval_recall": _retrieval_recall(strategy, expected, retrieved),
                     "input_tokens": run.input_tokens,
                     "output_tokens": run.output_tokens,
                     "retrieval_embedding_tokens": run.retrieval_embedding_tokens,
                     "retrieval_latency_ms": round(run.retrieval_latency_ms, 2),
                     "total_latency_ms": round(run.total_latency_ms, 2),
-                    "estimated_cost_usd": round(estimated_cost(run, strategy, pricing), 10),
-                    "cost_estimate_scope": (
-                        "model_and_direct_retrieval"
-                        if strategy == "direct_s3_vectors"
-                        else "model_only"
-                    ),
+                    "estimated_cost_usd": round(cost, 10) if cost is not None else None,
+                    "cost_estimate_scope": _cost_estimate_scope(strategy, cost),
                     "raw_answer": run.raw_answer,
                     "model_id": model_id,
                     "embedding_model_id": embedding_model_id,
@@ -148,6 +181,7 @@ def run_benchmark(
                 results.append(result)
                 print(
                     f"{question['id']}: {strategy} "
+                    f"success={result['task_success']} "
                     f"exact={result['selection_exact_match']} f1={result['selection_f1']:.3f} "
                     f"input_tokens={run.input_tokens}"
                 )
@@ -227,6 +261,20 @@ def _default_strategies(
     return ("full_markdown",)
 
 
+def _validate_run_parameters(*, model_id: str, top_k: int, repetitions: int) -> None:
+    if not model_id.strip():
+        raise ValueError("model_id must not be empty")
+    if top_k < 1:
+        raise ValueError("top_k must be at least 1")
+    if repetitions < 1:
+        raise ValueError("repetitions must be at least 1")
+
+
+def _counterbalanced_order(strategies: tuple[str, ...], offset: int) -> tuple[str, ...]:
+    rotation = offset % len(strategies)
+    return strategies[rotation:] + strategies[:rotation]
+
+
 def _validate_configuration(
     *,
     strategies: tuple[str, ...],
@@ -276,6 +324,20 @@ def _selection_metrics(expected: set[str], selected: set[str]) -> dict[str, floa
     }
 
 
+def _retrieval_recall(strategy: str, expected: set[str], retrieved: set[str]) -> float | None:
+    if strategy == "full_markdown":
+        return None
+    return len(expected & retrieved) / len(expected)
+
+
+def _cost_estimate_scope(strategy: str, cost: float | None) -> str:
+    if cost is None:
+        return "unavailable_for_configured_model"
+    if strategy == "direct_s3_vectors":
+        return "model_and_direct_retrieval"
+    return "model_only"
+
+
 def _required(value: str | None, name: str) -> str:
     if not value:
         raise ValueError(f"Missing required benchmark configuration: {name}")
@@ -296,6 +358,9 @@ def _write_results(
         "question_id",
         "category",
         "strategy",
+        "strategy_execution_order",
+        "task_success",
+        "routing_policy",
         "selection_correct",
         "selection_exact_match",
         "selection_precision",
@@ -328,9 +393,9 @@ def _write_results(
         "",
         "## Overall",
         "",
-        "| Strategy | Exact match | Category-macro exact | Mean F1 | Mean input tokens | "
-        "Mean latency | Cost scope |",
-        "| --- | ---: | ---: | ---: | ---: | ---: | --- |",
+        "| Strategy | Task success | Category-macro success | Strict exact | Mean F1 | "
+        "Mean input tokens | Mean latency | Cost scope |",
+        "| --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |",
     ]
     for strategy in strategies:
         subset = [result for result in results if result["strategy"] == strategy]
@@ -340,7 +405,7 @@ def _write_results(
     summary.extend(
         [
             "",
-            "## Exact match by question category",
+            "## Task success by question category",
             "",
             "| Category | " + " | ".join(strategies) + " |",
             "| --- | " + " | ".join("---:" for _ in strategies) + " |",
@@ -354,8 +419,8 @@ def _write_results(
                 for result in results
                 if result["strategy"] == strategy and result["category"] == category
             ]
-            accuracy = statistics.mean(bool(item["selection_exact_match"]) for item in subset)
-            cells.append(f"{accuracy:.1%}")
+            success_rate = statistics.mean(bool(item["task_success"]) for item in subset)
+            cells.append(f"{success_rate:.1%}")
         summary.append(f"| {category} | " + " | ".join(cells) + " |")
 
     hybrid = [result for result in results if result["strategy"] == "hybrid"]
@@ -380,7 +445,7 @@ def _write_results(
         summary.extend(
             [
                 "",
-                "| Category | Most common route | Mean calls | Exact match |",
+                "| Category | Most common route | Mean calls | Task success |",
                 "| --- | --- | ---: | ---: |",
             ]
         )
@@ -392,10 +457,10 @@ def _write_results(
                 category_routes[route] = category_routes.get(route, 0) + 1
             common_route = max(category_routes, key=category_routes.get)
             mean_calls = statistics.mean(item["source_calls"] for item in category_results)
-            accuracy = statistics.mean(
-                bool(item["selection_exact_match"]) for item in category_results
+            success_rate = statistics.mean(bool(item["task_success"]) for item in category_results)
+            summary.append(
+                f"| {category} | `{common_route}` | {mean_calls:.2f} | {success_rate:.1%} |"
             )
-            summary.append(f"| {category} | `{common_route}` | {mean_calls:.2f} | {accuracy:.1%} |")
 
     (output_dir / "summary.md").write_text("\n".join(summary) + "\n", encoding="utf-8")
     (output_dir / "run-metadata.json").write_text(
@@ -404,6 +469,9 @@ def _write_results(
                 "generated_at": datetime.now(UTC).isoformat(),
                 "records": len(results),
                 "strategies": list(strategies),
+                "hybrid_routing_policy": (
+                    HYBRID_ROUTING_POLICY if "hybrid" in strategies else None
+                ),
                 "pricing": asdict(Pricing()),
             },
             indent=2,
@@ -414,11 +482,12 @@ def _write_results(
 
 
 def _summary_row(strategy: str, subset: list[dict[str, Any]]) -> str:
-    accuracy = statistics.mean(bool(item["selection_exact_match"]) for item in subset)
+    success_rate = statistics.mean(bool(item["task_success"]) for item in subset)
+    exact_match = statistics.mean(bool(item["selection_exact_match"]) for item in subset)
     categories = {item["category"] for item in subset}
-    macro_accuracy = statistics.mean(
+    macro_success = statistics.mean(
         statistics.mean(
-            bool(item["selection_exact_match"]) for item in subset if item["category"] == category
+            bool(item["task_success"]) for item in subset if item["category"] == category
         )
         for category in categories
     )
@@ -427,6 +496,7 @@ def _summary_row(strategy: str, subset: list[dict[str, Any]]) -> str:
     mean_latency_ms = statistics.mean(item["total_latency_ms"] for item in subset)
     scopes = sorted({item["cost_estimate_scope"] for item in subset})
     return (
-        f"| {strategy} | {accuracy:.1%} | {macro_accuracy:.1%} | {mean_f1:.3f} | "
+        f"| {strategy} | {success_rate:.1%} | {macro_success:.1%} | {exact_match:.1%} | "
+        f"{mean_f1:.3f} | "
         f"{mean_input_tokens:.1f} | {mean_latency_ms:.1f} ms | {', '.join(scopes)} |"
     )
